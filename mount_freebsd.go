@@ -47,19 +47,20 @@ func isBoringMountFusefsError(err error) bool {
 	return false
 }
 
-func mount(dir string, conf *mountConfig, ready chan<- struct{}, errp *error) (*os.File, error) {
+func mount(dir string, conf *mountConfig, ready chan<- struct{}, errp *error) (fusefd *os.File, _ Backend, _ backendState, err error) {
 	for k, v := range conf.options {
 		if strings.Contains(k, ",") || strings.Contains(v, ",") {
 			// Silly limitation but the mount helper does not
 			// understand any escaping. See TestMountOptionCommaError.
-			return nil, fmt.Errorf("mount options cannot contain commas on FreeBSD: %q=%q", k, v)
+			err = fmt.Errorf("mount options cannot contain commas on FreeBSD: %q=%q", k, v)
+			return
 		}
 	}
 
 	f, err := os.OpenFile("/dev/fuse", os.O_RDWR, 0o000)
 	if err != nil {
 		*errp = err
-		return nil, err
+		return
 	}
 
 	cmd := exec.Command(
@@ -73,15 +74,18 @@ func mount(dir string, conf *mountConfig, ready chan<- struct{}, errp *error) (*
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("setting up mount_fusefs stderr: %v", err)
+		err = fmt.Errorf("setting up mount_fusefs stderr: %v", err)
+		return
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return nil, fmt.Errorf("setting up mount_fusefs stderr: %v", err)
+		err = fmt.Errorf("setting up mount_fusefs stderr: %v", err)
+		return
 	}
 
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("mount_fusefs: %v", err)
+	if err = cmd.Start(); err != nil {
+		err = fmt.Errorf("mount_fusefs: %v", err)
+		return
 	}
 	helperErrCh := make(chan error, 1)
 	var wg sync.WaitGroup
@@ -89,7 +93,7 @@ func mount(dir string, conf *mountConfig, ready chan<- struct{}, errp *error) (*
 	go lineLogger(&wg, "mount helper output", neverIgnoreLine, stdout)
 	go lineLogger(&wg, "mount helper error", handleMountFusefsStderr(helperErrCh), stderr)
 	wg.Wait()
-	if err := cmd.Wait(); err != nil {
+	if err = cmd.Wait(); err != nil {
 		// see if we have a better error to report
 		select {
 		case helperErr := <-helperErrCh:
@@ -99,13 +103,16 @@ func mount(dir string, conf *mountConfig, ready chan<- struct{}, errp *error) (*
 			}
 			// and now return what we grabbed from stderr as the real
 			// error
-			return nil, helperErr
+			err = helperErr
+			return
 		default:
 			// nope, fall back to generic message
 		}
-		return nil, fmt.Errorf("mount_fusefs: %v", err)
+		err = fmt.Errorf("mount_fusefs: %v", err)
+		return
 	}
 
 	close(ready)
-	return f, nil
+	fusefd = f
+	return
 }
