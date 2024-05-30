@@ -1270,12 +1270,36 @@ func errorString(err error) string {
 	return err.Error()
 }
 
+// writeFuseT writes a buffer via the fuse connection. If a write does not send
+// the full buffer, then it repeatedly sends the remainder.
+func (c *Conn) writeFuseT(msg []byte) error {
+	offset := 0
+
+	for offset < len(msg) {
+		// write the remaining buffer
+		n, err := syscall.Write(c.fd(), msg[offset:])
+		if n == 0 && err == nil {
+			// remote fd closed
+			return io.EOF
+		}
+		offset += n
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *Conn) writeToKernel(msg []byte) error {
 	out := (*outHeader)(unsafe.Pointer(&msg[0]))
 	out.Len = uint32(len(msg))
 
 	c.wio.Lock()
 	defer c.wio.Unlock()
+	if c.backend.IsFuseT() {
+		return c.writeFuseT(msg)
+	}
+
 	nn, err := syscall.Write(c.fd(), msg)
 	if err == nil && nn != len(msg) {
 		Debug(bugShortKernelWrite{
