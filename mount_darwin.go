@@ -52,7 +52,6 @@ func mountFuseT(
 	defer syscall.Close(remote_mon)
 
 	args := []string{
-		"--attrcache=false",
 	}
 	if conf.isReadonly() {
 		args = append(args, "-r")
