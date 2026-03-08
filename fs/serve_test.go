@@ -87,7 +87,8 @@ func TestMountpointDoesNotExist(t *testing.T) {
 		conn.Close()
 		t.Fatalf("expected error with non-existent mountpoint")
 	}
-	if _, ok := err.(*fuse.MountpointDoesNotExistError); !conn.Backend().IsFuseT() && !ok {
+	fuseT := conn != nil && conn.Backend().IsFuseT()
+	if _, ok := err.(*fuse.MountpointDoesNotExistError); !fuseT && !ok {
 		t.Fatalf("wrong error from mount: %T: %v", err, err)
 	}
 }
