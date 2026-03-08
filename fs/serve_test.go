@@ -4161,6 +4161,26 @@ func TestGoexit(t *testing.T) {
 
 // Test Poll: NodePoller and HandlePoller
 
+// checkPollSeen verifies the event sequence produced by pollDelayRead: one or
+// more "read-eagain" events (the kernel may retry reads before the wakeup
+// fires), followed by exactly one "wakeup" and one "read-ready".
+func checkPollSeen(t testing.TB, seen []string) {
+	t.Helper()
+	n := len(seen)
+	if n < 3 {
+		t.Errorf("too few poll events: %v", seen)
+		return
+	}
+	for _, s := range seen[:n-2] {
+		if s != "read-eagain" {
+			t.Errorf("unexpected event before wakeup: %q in %v", s, seen)
+		}
+	}
+	if g, e := strings.Join(seen[n-2:], " "), "wakeup read-ready"; g != e {
+		t.Errorf("wrong final poll events: %q != %q", g, e)
+	}
+}
+
 // pollDelayRead is a HandleReader that only lets a read succeed after
 // one round of polling.
 type pollDelayRead struct {
@@ -4170,8 +4190,9 @@ type pollDelayRead struct {
 	mu   sync.Mutex
 	seen []string
 
-	wakeup atomic.Value
-	ready  uint64
+	wakeup       atomic.Value
+	ready        uint64
+	scheduleOnce sync.Once
 }
 
 // Can be used as either Handle or Node. If these interfaces diverge,
@@ -4217,7 +4238,9 @@ func (n *pollDelayRead) Read(ctx context.Context, req *fuse.ReadRequest, resp *f
 	}
 	if atomic.LoadUint64(&n.ready) == 0 {
 		n.saw("read-eagain")
-		time.AfterFunc(1*time.Millisecond, n.doWakeup)
+		n.scheduleOnce.Do(func() {
+			time.AfterFunc(1*time.Millisecond, n.doWakeup)
+		})
 		return syscall.EAGAIN
 	}
 	n.saw("read-ready")
@@ -4273,9 +4296,7 @@ func TestReadPollNode(t *testing.T) {
 	if g, e := string(got.Data), hi; g != e {
 		t.Errorf("readAll = %q, want %q", g, e)
 	}
-	if g, e := strings.Join(child.seen, " "), "read-eagain wakeup read-ready"; g != e {
-		t.Errorf("wrong events: %q != %q", g, e)
-	}
+	checkPollSeen(t, child.seen)
 }
 
 // Test HandlePoller
@@ -4332,9 +4353,7 @@ func TestReadPollHandle(t *testing.T) {
 	if g, e := string(got.Data), hi; g != e {
 		t.Errorf("readAll = %q, want %q", g, e)
 	}
-	if g, e := strings.Join(child.handle.seen, " "), "read-eagain wakeup read-ready"; g != e {
-		t.Errorf("wrong events: %q != %q", g, e)
-	}
+	checkPollSeen(t, child.handle.seen)
 }
 
 // Test flock
