@@ -55,6 +55,13 @@ func isBoringFusermountError(err error) bool {
 	return false
 }
 
+func fusermountBinary() string {
+	if path, err := exec.LookPath("fusermount3"); err == nil {
+		return path
+	}
+	return "fusermount"
+}
+
 func mount(
 	dir string,
 	conf *mountConfig,
@@ -77,7 +84,7 @@ func mount(
 	defer readFile.Close()
 
 	cmd := exec.Command(
-		"fusermount",
+		fusermountBinary(),
 		"-o", conf.getOptions(),
 		"--",
 		dir,
